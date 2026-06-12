@@ -1,0 +1,6 @@
+{
+  "name": "Kids Storybook Voice & Art",
+  "description": "An interactive storybook creator and reader for children that writes stories, reads them aloud with high-quality AI text-to-speech, and paints custom page-by-page illustrations with AI image generation, complete with a friendly chat companion.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

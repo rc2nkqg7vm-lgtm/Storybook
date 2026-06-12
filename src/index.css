@@ -1,0 +1,32 @@
+@import "tailwindcss";
+
+@theme {
+  --color-natural-bg: #FDFBF7;
+  --color-natural-primary: #7E8B67;
+  --color-natural-accent: #D48A6A;
+  --color-natural-dark: #4A4A35;
+  --color-natural-muted: #5A5A40;
+  --color-natural-border: #E8E1D5;
+  --color-natural-soft: #F2EDE4;
+  --color-natural-clay: #EBE5D9;
+}
+
+body {
+  background-color: #FDFBF7;
+  color: #5A5A40;
+}
+
+/* Custom scrollbar for organic child chat thread */
+::-webkit-scrollbar {
+  width: 6px;
+}
+::-webkit-scrollbar-track {
+  background: #FDFBF7;
+}
+::-webkit-scrollbar-thumb {
+  background: #E8E1D5;
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #7E8B67;
+}
