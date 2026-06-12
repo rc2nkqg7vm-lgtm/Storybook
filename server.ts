@@ -32,10 +32,27 @@ function getAi(): GoogleGenAI {
   return aiInstance;
 }
 
+// Generate wrapper with retry logic for 503 errors
+async function generateWithRetry(ai: GoogleGenAI, request: any, maxRetries = 3) {
+  for (let i = 0; i < maxRetries; i++) {
+    try {
+      return await ai.models.generateContent(request);
+    } catch (err: any) {
+      const isUnavailable = err.status === 503 || err.status === 'UNAVAILABLE' || (err.message && (err.message.includes('503') || err.message.includes('UNAVAILABLE')));
+      if (isUnavailable && i < maxRetries - 1) {
+        console.warn(`Model unavailable, retrying in ${Math.pow(2, i)}s...`);
+        await new Promise(resolve => setTimeout(resolve, 1000 * Math.pow(2, i)));
+      } else {
+        throw err;
+      }
+    }
+  }
+}
+
 // 1. API: Storybook Creation (Interactive Start)
 app.post("/api/story/start", async (req, res) => {
   try {
-    const { theme, character, setting, customPrompt, numPages = 4, language = "English" } = req.body;
+    const { theme, character, setting, customPrompt, numPages = 4, language = "English", mood, educationalMode } = req.body;
     if (!theme || !character || !setting) {
       return res.status(400).json({ error: "Please enter theme, character, and setting!" });
     }
@@ -45,13 +62,34 @@ app.post("/api/story/start", async (req, res) => {
 Theme: ${theme}
 Character: ${character}
 Setting: ${setting}
+${mood ? `Mood/Tone: ${mood}\n` : ""}
 ${customPrompt ? `Custom Idea: "${customPrompt}"\n` : ""}
 This is Page 1 of a planned ${numPages}-page story.
 Write 1 to 3 delightful sentences appropriate for kids aged 3-8.
 At the end of the page, provide 2 to 3 "choices" for the reader to decide what the character should do next.
-Also provide a highly descriptive "imagePrompt" (e.g. "a vivid children's book illustration, watercolor style...") with no text in the image.`;
+Also provide a highly descriptive "imagePrompt" (e.g. "a vivid children's book illustration, watercolor style...") with no text in the image.
+${educationalMode ? `Since Educational Mode is ON, provide a short, fun piece of trivia (1 sentence) related to the current setting, theme, or events on this page in the 'trivia' field.` : ""}`;
 
-    const response = await ai.models.generateContent({
+    const properties: any = {
+      pageNumber: { type: Type.INTEGER },
+      text: { type: Type.STRING, description: "1 to 3 short sentences written beautifully for children." },
+      imagePrompt: { type: Type.STRING, description: "Highly descriptive illustration prompt." },
+      choices: {
+        type: Type.ARRAY,
+        items: {
+          type: Type.OBJECT,
+          properties: { text: { type: Type.STRING } }
+        }
+      }
+    };
+
+    if (educationalMode) {
+      properties.trivia = { type: Type.STRING, description: "A simple, fun, educational fact related to the page content." };
+    }
+
+    const requiredFields = ["pageNumber", "text", "imagePrompt", "choices"];
+
+    const response = await generateWithRetry(ai, {
       model: "gemini-3.5-flash",
       contents: prompt,
       config: {
@@ -60,23 +98,12 @@ Also provide a highly descriptive "imagePrompt" (e.g. "a vivid children's book i
         responseSchema: {
           type: Type.OBJECT,
           properties: {
-            title: { type: Type.STRING, description: "The beautiful title of the storybook" },
-            page: {
-              type: Type.OBJECT,
-              properties: {
-                pageNumber: { type: Type.INTEGER },
-                text: { type: Type.STRING, description: "1 to 3 short sentences written beautifully for children." },
-                imagePrompt: { type: Type.STRING, description: "Highly descriptive illustration prompt." },
-                choices: {
-                  type: Type.ARRAY,
-                  items: {
-                    type: Type.OBJECT,
-                    properties: { text: { type: Type.STRING } }
-                  }
-                }
-              },
-              required: ["pageNumber", "text", "imagePrompt", "choices"]
-            }
+             title: { type: Type.STRING, description: "The beautiful title of the storybook" },
+             page: {
+               type: Type.OBJECT,
+               properties: properties,
+               required: requiredFields
+             }
           },
           required: ["title", "page"]
         }
@@ -94,14 +121,18 @@ Also provide a highly descriptive "imagePrompt" (e.g. "a vivid children's book i
     });
   } catch (err: any) {
     console.error("Story start error:", err);
-    res.status(500).json({ error: err.message || "Could not start your story." });
+    let msg = err.message || "Could not start your story.";
+    if (msg.includes("503") || msg.includes("UNAVAILABLE")) {
+      msg = "The storyteller is taking a quick break! We are experiencing high demand right now. Please wait a few seconds and try again.";
+    }
+    res.status(500).json({ error: msg });
   }
 });
 
 // 1.5 API: Storybook Creation (Interactive Continue)
 app.post("/api/story/continue", async (req, res) => {
   try {
-    const { title, previousPages, choice, nextPageNum, targetPages, language = "English" } = req.body;
+    const { title, previousPages, choice, nextPageNum, targetPages, language = "English", mood, educationalMode } = req.body;
     
     const isLastPage = nextPageNum >= targetPages;
     const historyText = previousPages.map((p: any) => `Page ${p.pageNumber}: ${p.text}`).join("\n");
@@ -113,11 +144,35 @@ ${historyText}
 
 The reader chose: "${choice}".
 Write Page ${nextPageNum}.
+${mood ? `Maintain the Mood/Tone: ${mood}\n` : ""}
 ${isLastPage ? "This is the final page. Conclude the story beautifully. Do NOT provide choices." : "Provide 2-3 choices for what happens next."}
 Write 1 to 3 delightful sentences appropriate for kids aged 3-8.
-Also provide a highly descriptive "imagePrompt" matching the visual style of the story (e.g. "a vivid children's book illustration, watercolor style..."). No text in the image.`;
+Also provide a highly descriptive "imagePrompt" matching the visual style of the story (e.g. "a vivid children's book illustration, watercolor style..."). No text in the image.
+${educationalMode ? `Since Educational Mode is ON, provide a short, fun piece of trivia (1 sentence) related to the current setting, theme, or events on this page in the 'trivia' field.` : ""}`;
 
-    const response = await ai.models.generateContent({
+    const properties: any = {
+      pageNumber: { type: Type.INTEGER },
+      text: { type: Type.STRING },
+      imagePrompt: { type: Type.STRING }
+    };
+
+    const requiredFields = ["pageNumber", "text", "imagePrompt"];
+
+    if (!isLastPage) {
+      properties.choices = {
+        type: Type.ARRAY,
+        items: {
+          type: Type.OBJECT,
+          properties: { text: { type: Type.STRING } }
+        }
+      };
+    }
+
+    if (educationalMode) {
+      properties.trivia = { type: Type.STRING, description: "A simple, fun, educational fact related to the page content." };
+    }
+
+    const response = await generateWithRetry(ai, {
       model: "gemini-3.5-flash",
       contents: prompt,
       config: {
@@ -126,22 +181,11 @@ Also provide a highly descriptive "imagePrompt" matching the visual style of the
         responseSchema: {
           type: Type.OBJECT,
           properties: {
-            page: {
-              type: Type.OBJECT,
-              properties: {
-                pageNumber: { type: Type.INTEGER },
-                text: { type: Type.STRING },
-                imagePrompt: { type: Type.STRING },
-                choices: {
-                  type: Type.ARRAY,
-                  items: {
-                    type: Type.OBJECT,
-                    properties: { text: { type: Type.STRING } }
-                  }
-                }
-              },
-              required: ["pageNumber", "text", "imagePrompt"]
-            }
+             page: {
+               type: Type.OBJECT,
+               properties: properties,
+               required: requiredFields
+             }
           },
           required: ["page"]
         }
@@ -155,7 +199,11 @@ Also provide a highly descriptive "imagePrompt" matching the visual style of the
     res.json(data);
   } catch (err: any) {
     console.error("Story continue error:", err);
-    res.status(500).json({ error: err.message || "Could not continue your story." });
+    let msg = err.message || "Could not continue your story.";
+    if (msg.includes("503") || msg.includes("UNAVAILABLE")) {
+       msg = "The storyteller is resting just a moment! We are experiencing high demand right now. Please wait a few seconds and try again.";
+    }
+    res.status(500).json({ error: msg });
   }
 });
 
@@ -169,7 +217,7 @@ app.post("/api/story/tts", async (req, res) => {
 
     const ai = getAi();
     // 'Puck', 'Charon', 'Kore', 'Fenrir', 'Zephyr'
-    const response = await ai.models.generateContent({
+    const response = await generateWithRetry(ai, {
       model: "gemini-3.1-flash-tts-preview", // Specified model
       contents: [{ parts: [{ text: `Read cheerfully: ${text}` }] }],
       config: {
@@ -203,8 +251,8 @@ app.post("/api/story/illustration", async (req, res) => {
     }
 
     const ai = getAi();
-    const response = await ai.models.generateContent({
-      model: "gemini-3-pro-image-preview", // Specified model
+    const response = await generateWithRetry(ai, {
+      model: "gemini-3.1-flash-image", // Changed to correct model
       contents: {
         parts: [{ text: imagePrompt }]
       },
@@ -258,7 +306,7 @@ app.post("/api/story/chat", async (req, res) => {
       modelName = "gemini-3.5-flash"; // general task
     } else if (companionId === "magic_spark") {
       systemInstruction = "You are Pippin, a sparkly lightning-fast starry pixie residing inside the book. You answer everything with magical dust and lightning speed! Write very brief (under 15 words) and extremely bubbly, upbeat answers with lots of sparkle emojis (✨). Be extremely snappy!";
-      modelName = "gemini-3.1-flash-lite"; // for tasks that should happen fast
+      modelName = "gemini-3.5-flash"; // for tasks that should happen fast
     } else {
       systemInstruction = "You are a friendly, encouraging story companion for kids. Answer in a warm, child-safe, engaging way.";
       modelName = "gemini-3.5-flash";
@@ -301,7 +349,7 @@ app.post("/api/story/chat", async (req, res) => {
     });
 
     const ai = getAi();
-    const result = await ai.models.generateContent({
+    const result = await generateWithRetry(ai, {
       model: modelName,
       contents: formattedContents,
       config: {
@@ -314,6 +362,66 @@ app.post("/api/story/chat", async (req, res) => {
   } catch (err: any) {
     console.error("Chat companion error:", err);
     res.status(500).json({ error: err.message || "The companion is currently taking a little nap. Try again!" });
+  }
+});
+
+// 5. API: Story Glossary
+app.post("/api/story/glossary", async (req, res) => {
+  try {
+    const { word } = req.body;
+    if (!word) return res.status(400).json({ error: "No word provided." });
+
+    const ai = getAi();
+    const prompt = `Define the tricky word "${word}" simply and playfully for a child aged 3-8 in 1 short sentence.
+Then, create an "imagePrompt" to beautifully illustrate this concept in a children's book style.`;
+    
+    const defResponse = await generateWithRetry(ai, {
+      model: "gemini-3.5-flash",
+      contents: prompt,
+      config: {
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+             definition: { type: Type.STRING },
+             imagePrompt: { type: Type.STRING }
+          },
+          required: ["definition", "imagePrompt"]
+        }
+      }
+    });
+
+    if (!defResponse.text) throw new Error("Empty response");
+    const data = JSON.parse(defResponse.text);
+
+    let base64Image = null;
+    try {
+      const imgResponse = await generateWithRetry(ai, {
+        model: "gemini-3.1-flash-image",
+        contents: { parts: [{ text: data.imagePrompt }] },
+        config: { imageConfig: { aspectRatio: "1:1", imageSize: "1K" } }
+      });
+      const parts = imgResponse.candidates?.[0]?.content?.parts;
+      if (parts) {
+        for (const part of parts) {
+          if (part.inlineData?.data) {
+            base64Image = part.inlineData.data;
+            break;
+          }
+        }
+      }
+    } catch (e) {
+      console.error("Glossary image fallback to text only", e);
+    }
+
+    res.json({
+      word,
+      definition: data.definition,
+      imageUrl: base64Image ? `data:image/png;base64,${base64Image}` : null
+    });
+  } catch (err: any) {
+    console.error("Glossary error:", err);
+    res.status(500).json({ error: "Could not fetch dictionary right now." });
   }
 });
 

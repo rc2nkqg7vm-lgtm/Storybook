@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import {
   BookOpen, ChevronLeft, ChevronRight, Play, Square,
-  RotateCcw, Sparkles, Image, RefreshCw, Volume2, ArrowLeft, Loader2, Leaf, MoveRight
+  RotateCcw, Sparkles, Image as ImageIcon, RefreshCw, Volume2, ArrowLeft, Loader2, Leaf, MoveRight, Bookmark, BookmarkCheck, Music
 } from "lucide-react";
 import { Storybook, ImageSize } from "../types";
 
@@ -16,6 +16,8 @@ interface StorybookReaderProps {
   onChangeImageSize: (size: ImageSize) => void;
   onContinue: (choice: string) => void;
   isContinuing: boolean;
+  onSaveToLibrary: () => void;
+  isCurrentStorySaved: boolean;
 }
 
 export default function StorybookReader({
@@ -28,6 +30,8 @@ export default function StorybookReader({
   onChangeImageSize,
   onContinue,
   isContinuing,
+  onSaveToLibrary,
+  isCurrentStorySaved,
 }: StorybookReaderProps) {
   const [currentPage, setCurrentPage] = useState(1);
   const [imageLoading, setImageLoading] = useState(false);
@@ -40,10 +44,305 @@ export default function StorybookReader({
   const [audioCtx, setAudioCtx] = useState<AudioContext | null>(null);
 
   const [highlightWordIdx, setHighlightWordIdx] = useState(-1);
+  const [narrationSpeed, setNarrationSpeed] = useState<number>(1);
+  const [fontSize, setFontSize] = useState<"Small" | "Medium" | "Large">("Medium");
   const playAnimationRef = useRef<number>();
+  
+  // Glossary state
+  const [glossaryWord, setGlossaryWord] = useState<string | null>(null);
+  const [glossaryDef, setGlossaryDef] = useState<{def: string; img: string | null} | null>(null);
+  const [glossaryLoading, setGlossaryLoading] = useState(false);
+
+  const [isDrawingMode, setIsDrawingMode] = useState(false);
+  const [isDrawing, setIsDrawing] = useState(false);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  // Optional: save doodles per page so they persist on navigation
+  const [doodles, setDoodles] = useState<Record<number, string>>({});
+
+  const ambientAudioRefs = useRef<HTMLAudioElement[]>([]);
+
+  const [isMusicPlaying, setIsMusicPlaying] = useState(false);
+  const musicCtxRef = useRef<AudioContext | null>(null);
+  const musicOscRef = useRef<OscillatorNode | null>(null);
+  const musicGainRef = useRef<GainNode | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (musicCtxRef.current) {
+        musicCtxRef.current.close();
+      }
+    };
+  }, []);
+
+  const toggleMusic = () => {
+    if (isMusicPlaying) {
+      if (musicCtxRef.current) {
+        musicCtxRef.current.close();
+        musicCtxRef.current = null;
+      }
+      setIsMusicPlaying(false);
+      return;
+    }
+    
+    const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
+    musicCtxRef.current = ctx;
+
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    const filter = ctx.createBiquadFilter();
+
+    osc.connect(filter);
+    filter.connect(gain);
+    gain.connect(ctx.destination);
+
+    // Simple ambient settings based on mood
+    const m = story.mood ? story.mood.toLowerCase() : "";
+    if (m.includes('sleepy') || m.includes('calming')) {
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(150, ctx.currentTime);
+      filter.type = 'lowpass';
+      filter.frequency.setValueAtTime(300, ctx.currentTime);
+    } else if (m.includes('adventurous') || m.includes('bold')) {
+      osc.type = 'triangle';
+      osc.frequency.setValueAtTime(220, ctx.currentTime);
+      filter.type = 'lowpass';
+      filter.frequency.setValueAtTime(600, ctx.currentTime);
+    } else if (m.includes('spooky')) {
+      osc.type = 'sawtooth';
+      osc.frequency.setValueAtTime(110, ctx.currentTime);
+      filter.type = 'bandpass';
+      filter.frequency.setValueAtTime(400, ctx.currentTime);
+    } else { // happy
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(330, ctx.currentTime);
+      filter.type = 'lowpass';
+      filter.frequency.setValueAtTime(800, ctx.currentTime);
+    }
+
+    gain.gain.setValueAtTime(0, ctx.currentTime);
+    gain.gain.linearRampToValueAtTime(0.015, ctx.currentTime + 2); // very soft
+
+    // Adds a tiny bit of LFO for "ambient pulse"
+    const lfo = ctx.createOscillator();
+    lfo.type = 'sine';
+    lfo.frequency.setValueAtTime(0.1, ctx.currentTime);
+    const lfoGain = ctx.createGain();
+    lfoGain.gain.setValueAtTime(0.01, ctx.currentTime);
+    lfo.connect(lfoGain);
+    lfoGain.connect(gain.gain);
+    lfo.start();
+
+    osc.start();
+    
+    musicOscRef.current = osc;
+    musicGainRef.current = gain;
+    setIsMusicPlaying(true);
+  };
+
+  // Setup canvas size
+  useEffect(() => {
+    if (canvasRef.current) {
+      const container = canvasRef.current.parentElement;
+      if (container) {
+        canvasRef.current.width = container.clientWidth;
+        canvasRef.current.height = container.clientHeight;
+      }
+      
+      // Load saved doodle for current page if exists
+      const ctx = canvasRef.current.getContext('2d');
+      if (ctx) {
+        ctx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
+        if (doodles[currentPage]) {
+          const img = new window.Image();
+          img.src = doodles[currentPage];
+          img.onload = () => {
+             ctx.drawImage(img, 0, 0);
+          };
+        }
+      }
+    }
+  }, [currentPage, isDrawingMode]);
+
+  const startDrawing = (e: React.PointerEvent) => {
+    if (!isDrawingMode || !canvasRef.current) return;
+    const ctx = canvasRef.current.getContext('2d');
+    if (!ctx) return;
+    
+    const rect = canvasRef.current.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    ctx.strokeStyle = '#D48A6A'; // Natural accent
+    ctx.lineWidth = 6;
+    ctx.lineCap = 'round';
+    setIsDrawing(true);
+  };
+
+  const draw = (e: React.PointerEvent) => {
+    if (!isDrawing || !canvasRef.current) return;
+    const ctx = canvasRef.current.getContext('2d');
+    if (!ctx) return;
+    
+    const rect = canvasRef.current.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    
+    ctx.lineTo(x, y);
+    ctx.stroke();
+  };
+
+  const stopDrawing = () => {
+    if (isDrawing && canvasRef.current) {
+      setIsDrawing(false);
+      // Save canvas state
+      setDoodles(prev => ({
+        ...prev,
+        [currentPage]: canvasRef.current!.toDataURL()
+      }));
+    }
+  };
+
+  const clearCanvas = () => {
+    if (canvasRef.current) {
+       const ctx = canvasRef.current.getContext('2d');
+       if (ctx) {
+         ctx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
+         setDoodles(prev => {
+            const next = { ...prev };
+            delete next[currentPage];
+            return next;
+         });
+       }
+    }
+  };
+
+  // Function to play sound effect based on text matching
+  const playAmbientSound = (text: string) => {
+    const textLower = text.toLowerCase();
+    
+    // Some sample mappings 
+    // Usually these would be actual loaded audio files from the backend, 
+    // but we can set up simple generated beeps/noise or assume public domain audio urls.
+    // For this context, we will use a small synthesized envelope since we can't load real files reliably.
+    
+    // We will use the web audio API we already have to build a gentle synth
+    if (audioCtx) {
+      if (textLower.includes("rain") || textLower.includes("storm")) {
+        createNoiseSynth("rain");
+      }
+      if (textLower.includes("bird") || textLower.includes("fly") || textLower.includes("wings")) {
+        createBirdSynth();
+      }
+      if (textLower.includes("magic") || textLower.includes("sparkle") || textLower.includes("glow")) {
+        createChimeSynth();
+      }
+    }
+  };
+
+  const createNoiseSynth = (type: string) => {
+    if (!audioCtx) return;
+    const bufferSize = audioCtx.sampleRate * 2; // 2 seconds of noise
+    const buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
+    const data = buffer.getChannelData(0);
+    for (let i = 0; i < bufferSize; i++) {
+        data[i] = Math.random() * 2 - 1; 
+    }
+    const noise = audioCtx.createBufferSource();
+    noise.buffer = buffer;
+    
+    const filter = audioCtx.createBiquadFilter();
+    filter.type = type === "rain" ? "lowpass" : "highpass";
+    filter.frequency.value = 1000;
+    
+    const gainNode = audioCtx.createGain();
+    gainNode.gain.setValueAtTime(0, audioCtx.currentTime);
+    gainNode.gain.linearRampToValueAtTime(0.05, audioCtx.currentTime + 0.5);
+    gainNode.gain.linearRampToValueAtTime(0, audioCtx.currentTime + 2);
+    
+    noise.connect(filter);
+    filter.connect(gainNode);
+    gainNode.connect(audioCtx.destination);
+    noise.start();
+  };
+
+  const createBirdSynth = () => {
+    if (!audioCtx) return;
+    const osc = audioCtx.createOscillator();
+    osc.type = "sine";
+    const gainNode = audioCtx.createGain();
+    
+    osc.frequency.setValueAtTime(2000, audioCtx.currentTime);
+    osc.frequency.exponentialRampToValueAtTime(3000, audioCtx.currentTime + 0.1);
+    osc.frequency.exponentialRampToValueAtTime(2000, audioCtx.currentTime + 0.2);
+    
+    gainNode.gain.setValueAtTime(0, audioCtx.currentTime);
+    gainNode.gain.linearRampToValueAtTime(0.05, audioCtx.currentTime + 0.05);
+    gainNode.gain.linearRampToValueAtTime(0, audioCtx.currentTime + 0.2);
+    
+    osc.connect(gainNode);
+    gainNode.connect(audioCtx.destination);
+    osc.start();
+    osc.stop(audioCtx.currentTime + 0.2);
+  };
+
+  const createChimeSynth = () => {
+    if (!audioCtx) return;
+    const osc = audioCtx.createOscillator();
+    osc.type = "triangle";
+    const gainNode = audioCtx.createGain();
+    
+    osc.frequency.setValueAtTime(1500, audioCtx.currentTime);
+    
+    gainNode.gain.setValueAtTime(0, audioCtx.currentTime);
+    gainNode.gain.linearRampToValueAtTime(0.1, audioCtx.currentTime + 0.1);
+    gainNode.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 1.5);
+    
+    osc.connect(gainNode);
+    gainNode.connect(audioCtx.destination);
+    osc.start();
+    osc.stop(audioCtx.currentTime + 1.5);
+  };
+
+  // Handle glossary click
+  const handleWordClick = async (rawWord: string) => {
+    const word = rawWord.replace(/[^a-zA-Z]/g, "").toLowerCase();
+    if (word.length < 3) return; // Skip very short words like "a", "it", "to"
+
+    setGlossaryWord(word);
+    setGlossaryLoading(true);
+    setGlossaryDef(null);
+    try {
+      const res = await fetch("/api/story/glossary", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ word }),
+      });
+      const data = await res.json();
+      if (!data.error) {
+        setGlossaryDef({ def: data.definition, img: data.imageUrl });
+      } else {
+         setGlossaryWord(null);
+      }
+    } catch {
+      setGlossaryWord(null);
+    } finally {
+      setGlossaryLoading(false);
+    }
+  };
 
   const { title, pages } = story;
-  const page = pages[currentPage - 1];
+  const page = pages?.[currentPage - 1];
+
+  if (!page) {
+    return (
+      <div className="flex flex-col items-center justify-center p-12 text-center h-full w-full bg-natural-bg rounded-3xl">
+        <Loader2 className="animate-spin text-natural-accent mb-4" size={48} />
+        <h2 className="text-xl font-bold text-natural-dark">Turning the page...</h2>
+      </div>
+    );
+  }
 
   // Turn page - ensures we stop playing any audio
   const handlePageChange = (direction: "next" | "prev") => {
@@ -125,6 +424,7 @@ export default function StorybookReader({
         setPlayingPage(null);
       };
 
+      source.playbackRate.value = narrationSpeed;
       source.start(0);
       setActiveSource(source);
       setPlayingPage(currentPage);
@@ -192,19 +492,30 @@ export default function StorybookReader({
   useEffect(() => {
     if (playingPage === currentPage && audioCtx && activeSource) {
       const startTime = audioCtx.currentTime;
-      const duration = activeSource.buffer?.duration || 1;
+      const duration = (activeSource.buffer?.duration || 1) / narrationSpeed;
       
       const updateHighlight = () => {
         if (!page) return;
         const elapsed = audioCtx.currentTime - startTime;
         const progress = Math.min(elapsed / duration, 1.0);
         
-        const totalChars = page.text.length;
+        // Update visual timer if it exists. We check by ID to avoid refs overhead
+        const timerBubble = document.getElementById("narration-timer-progress");
+        if (timerBubble) {
+           timerBubble.style.width = `${progress * 100}%`;
+        }
+        const timerText = document.getElementById("narration-timer-text");
+        if (timerText) {
+           const remain = Math.max(0, duration - elapsed);
+           timerText.innerText = Math.ceil(remain) + "s";
+        }
+        
+        const totalChars = (page.text || "").length;
         const targetCharIdx = progress * totalChars;
         
         let charAcc = 0;
         let foundWordIdx = -1;
-        const renderWords = page.text.split(" ");
+        const renderWords = (page.text || "").split(" ");
         
         for (let i = 0; i < renderWords.length; i++) {
           charAcc += renderWords[i].length + 1; // +1 for the space
@@ -239,7 +550,7 @@ export default function StorybookReader({
   return (
     <div className="flex flex-col gap-6 w-full">
       {/* Upper Navigation & Affordances */}
-      <div className="flex flex-wrap items-center justify-between gap-4 bg-white/80 backdrop-blur-md px-6 py-4 rounded-3xl border border-natural-border shadow-sm">
+      <div className="flex flex-wrap items-center justify-between gap-4 bg-white/80 dark:bg-natural-bg/80 backdrop-blur-md px-6 py-4 rounded-3xl border border-natural-border shadow-sm">
         <button
           onClick={onClose}
           className="flex items-center gap-1.5 px-4 py-2 bg-natural-soft hover:bg-natural-clay/50 text-natural-dark font-bold rounded-2xl border border-natural-border/60 text-xs sm:text-sm transition-all"
@@ -247,30 +558,67 @@ export default function StorybookReader({
           <ArrowLeft size={14} /> Close Book
         </button>
 
-        <h3 className="text-base sm:text-lg font-serif font-bold text-natural-dark line-clamp-1 flex items-center gap-2">
-          📖 {title}
-        </h3>
+        <div className="flex-1 max-w-sm mx-auto px-4 hidden sm:block">
+          <div className="flex flex-col gap-1 items-center mb-1">
+            <span className="text-[10px] font-bold text-natural-primary uppercase tracking-wider">
+              {pages.length - currentPage} pages left
+            </span>
+            <div className="w-full h-2 bg-natural-soft rounded-full overflow-hidden">
+              <div 
+                className="h-full bg-natural-primary rounded-full transition-all duration-300" 
+                style={{ width: `${(currentPage / pages.length) * 100}%` }}
+              />
+            </div>
+          </div>
+        </div>
 
-        {/* Quality Size Controls: Direct requirement satisfying affordance */}
-        <div className="flex items-center gap-1.5 bg-natural-soft/70 p-1 rounded-2xl border border-natural-border">
-          <span className="text-xs font-bold text-natural-muted px-2 flex items-center gap-1">
-            <Image size={11} /> Size:
-          </span>
-          {(["1K", "2K", "4K"] as ImageSize[]).map((size) => (
-            <button
-              key={size}
-              onClick={() => {
-                onChangeImageSize(size);
-              }}
-              className={`px-2.5 py-1 text-xs font-bold rounded-xl transition-all ${
-                imageSize === size
-                  ? "bg-natural-primary text-white shadow-sm"
-                  : "text-natural-muted hover:bg-natural-clay/40"
-              }`}
-            >
-              {size}
-            </button>
-          ))}
+        <div className="flex items-center gap-3">
+          <button
+            onClick={toggleMusic}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl font-bold border transition-all text-xs ${
+              isMusicPlaying
+                ? "bg-natural-accent/10 border-natural-accent text-natural-accent pointer-events-auto"
+                : "bg-white dark:bg-natural-soft text-natural-dark border-natural-border hover:border-natural-accent/50"
+            }`}
+            title="Music Theme"
+          >
+            <Music size={14} className={isMusicPlaying ? 'animate-pulse' : ''} />
+            <span className="hidden sm:inline">Music</span>
+          </button>
+          
+          <button
+            onClick={onSaveToLibrary}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl font-bold border transition-all text-xs ${
+              isCurrentStorySaved
+                ? "bg-natural-soft text-natural-accent border-natural-accent/30"
+                : "bg-white dark:bg-natural-soft text-natural-dark border-natural-border hover:border-natural-accent/50"
+            }`}
+          >
+            {isCurrentStorySaved ? <BookmarkCheck size={14} /> : <Bookmark size={14} />}
+            <span className="hidden sm:inline">{isCurrentStorySaved ? "Saved" : "Save"}</span>
+          </button>
+
+          {/* Quality Size Controls: Direct requirement satisfying affordance */}
+          <div className="flex items-center gap-1.5 bg-natural-soft/70 p-1 rounded-2xl border border-natural-border">
+            <span className="text-xs font-bold text-natural-muted px-2 flex items-center gap-1 hidden sm:flex">
+              <ImageIcon size={11} /> Size:
+            </span>
+            {(["1K", "2K", "4K"] as ImageSize[]).map((size) => (
+              <button
+                key={size}
+                onClick={() => {
+                  onChangeImageSize(size);
+                }}
+                className={`px-2.5 py-1 text-xs font-bold rounded-xl transition-all ${
+                  imageSize === size
+                    ? "bg-natural-primary text-white shadow-sm"
+                    : "text-natural-muted hover:bg-natural-clay/40"
+                }`}
+              >
+                {size}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
 
@@ -278,7 +626,7 @@ export default function StorybookReader({
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-stretch">
         {/* Left Side: Art Illustration Panel with gorgeous Natural Tones double border frame */}
         <div className="lg:col-span-7 flex flex-col">
-          <div className="bg-[#EBE5D9] rounded-[48px] md:rounded-[56px] border-[8px] md:border-[12px] border-white aspect-[4/3] flex items-center justify-center relative overflow-hidden shadow-2xl min-h-[300px]">
+          <div className="bg-[#EBE5D9] dark:bg-natural-clay rounded-[48px] md:rounded-[56px] border-[8px] md:border-[12px] border-white dark:border-natural-soft aspect-[4/3] flex items-center justify-center relative overflow-hidden shadow-2xl min-h-[300px]">
             {imageLoading ? (
               <div className="absolute inset-0 bg-natural-dark/90 flex flex-col items-center justify-center p-6 text-center z-10">
                 <motion.div
@@ -334,34 +682,74 @@ export default function StorybookReader({
             )}
 
             {/* Page number badge consistently themed */}
-            <div className="absolute bottom-4 left-4 bg-natural-dark/80 backdrop-blur-md text-white font-bold px-3.5 py-1.5 rounded-full text-xs">
+            <div className="absolute bottom-4 left-4 bg-natural-dark/80 backdrop-blur-md text-white font-bold px-3.5 py-1.5 rounded-full text-xs z-30">
               Page {currentPage} of {pages.length}
             </div>
 
-            {/* Repaint Affordance beautifully matched to Natural Tones style */}
-            <div className="absolute bottom-4 right-4 flex items-center gap-1.5">
+            {/* Drawing Canvas Over Illustration */}
+            <canvas
+              ref={canvasRef}
+              className={`absolute inset-0 w-full h-full cursor-crosshair touch-none transition-opacity duration-300 ${isDrawingMode ? 'opacity-100 z-20' : 'opacity-0 pointer-events-none'}`}
+              onPointerDown={startDrawing}
+              onPointerMove={draw}
+              onPointerUp={stopDrawing}
+              onPointerLeave={stopDrawing}
+            />
+
+            {/* Repaint and Drawing Mode Affordances beautifully matched to Natural Tones style */}
+            <div className="absolute bottom-4 right-4 flex items-center gap-1.5 z-30">
+              {isDrawingMode && (
+                 <button
+                   onClick={clearCanvas}
+                   className="bg-white/90 dark:bg-natural-bg/90 hover:bg-white text-natural-dark px-3 py-2 rounded-full text-xs font-extrabold transition-all shadow-sm border border-natural-border/60"
+                 >
+                   Clear
+                 </button>
+              )}
+              <button
+                onClick={() => setIsDrawingMode(!isDrawingMode)}
+                title={isDrawingMode ? "Stop drawing" : "Draw over image"}
+                className={`backdrop-blur-md px-4 py-2 rounded-full text-xs font-extrabold transition-all flex items-center gap-2 shadow-sm border border-natural-border/60 ${isDrawingMode ? "bg-natural-primary text-white border-transparent" : "bg-white/90 dark:bg-natural-bg/90 text-natural-primary hover:bg-white"}`}
+              >
+                <span>✏️ {isDrawingMode ? "Done" : "Doodle"}</span>
+              </button>
+
               <button
                 onClick={() => paintIllustration(true)}
                 title="Repaint page"
                 disabled={imageLoading}
-                className="bg-white/90 hover:bg-white text-natural-accent hover:text-natural-accent/80 backdrop-blur-md px-4 py-2 rounded-full text-xs font-extrabold transition-all flex items-center gap-2 shadow-sm border border-natural-border/60 disabled:opacity-50"
+                className="bg-white/90 dark:bg-natural-bg/90 hover:bg-white dark:hover:bg-natural-bg text-natural-accent hover:text-natural-accent/80 backdrop-blur-md px-4 py-2 rounded-full text-xs font-extrabold transition-all flex items-center gap-2 shadow-sm border border-natural-border/60 disabled:opacity-50"
               >
                 <RefreshCw size={13} className={imageLoading ? "animate-spin" : ""} />
-                <span>Repaint ({imageSize})</span>
+                <span className="hidden sm:inline">Repaint ({imageSize})</span>
               </button>
             </div>
           </div>
         </div>
 
         {/* Right Side: Text & Reader Control Panel with story text and Narrator audio bar */}
-        <div className="lg:col-span-5 flex flex-col justify-between bg-white rounded-[40px] border-[10px] border-white p-7 shadow-2xl relative min-h-[380px]">
+        <div className="lg:col-span-5 flex flex-col justify-between bg-white dark:bg-natural-bg rounded-[40px] border-[10px] border-white dark:border-natural-soft p-7 shadow-2xl relative min-h-[380px]">
           {/* Top text area with book styling */}
           <div className="space-y-5">
             <div className="flex justify-between items-center border-b border-natural-border pb-3">
               <span className="px-3 py-1 bg-natural-soft rounded-md text-[10px] font-bold uppercase tracking-wider text-natural-primary">
                 Page {currentPage} of {pages.length}
               </span>
-              <span className="text-sm">🌿</span>
+              
+              {/* Font Size Affordance */}
+              <div className="flex bg-natural-soft p-1 rounded-lg gap-1 border border-natural-border/60">
+                {(["Small", "Medium", "Large"] as const).map(size => (
+                  <button
+                    key={size}
+                    onClick={() => setFontSize(size)}
+                    className={`px-2 py-0.5 text-[10px] font-bold rounded transition-colors ${
+                      fontSize === size ? "bg-white text-natural-primary shadow-sm" : "text-natural-muted hover:text-natural-dark"
+                    }`}
+                  >
+                    {size === "Small" ? "A" : size === "Medium" ? "aA" : "Aa"}
+                  </button>
+                ))}
+              </div>
             </div>
 
             {/* Interactive text section styled in high-class Georgia serif */}
@@ -373,13 +761,18 @@ export default function StorybookReader({
                   animate={{ opacity: 1, x: 0 }}
                   exit={{ opacity: 0, x: -20 }}
                   transition={{ duration: 0.3 }}
-                  className="text-lg sm:text-xl md:text-2xl font-serif text-natural-dark leading-relaxed italic flex flex-wrap"
+                  className={`${
+                    fontSize === "Small" ? "text-base sm:text-lg md:text-xl" :
+                    fontSize === "Medium" ? "text-lg sm:text-xl md:text-2xl" :
+                    "text-xl sm:text-2xl md:text-3xl"
+                  } font-serif text-natural-dark leading-relaxed italic flex flex-wrap`}
                   style={{ fontFamily: "'Georgia', serif, 'Times New Roman'" }}
                 >
-                  {page.text.split(" ").map((word, wIdx) => (
+                  {(page.text || "").split(" ").map((word, wIdx) => (
                     <span 
                       key={wIdx} 
-                      className={`mr-[0.25em] transition-colors duration-150 ${
+                      onClick={() => handleWordClick(word)}
+                      className={`mr-[0.25em] transition-colors duration-150 cursor-pointer hover:text-natural-accent hover:border-b hover:border-natural-accent border-transparent border-b ${
                         highlightWordIdx === wIdx ? "text-natural-accent bg-natural-accent/10 rounded-lg px-0.5 -mx-0.5" : ""
                       }`}
                     >
@@ -389,6 +782,51 @@ export default function StorybookReader({
                 </motion.div>
               </AnimatePresence>
             </div>
+
+            {/* Glossary Modal */}
+            <AnimatePresence>
+              {glossaryWord && (
+                <motion.div 
+                   initial={{ opacity: 0, scale: 0.95 }}
+                   animate={{ opacity: 1, scale: 1 }}
+                   exit={{ opacity: 0, scale: 0.95 }}
+                   className="absolute bg-white dark:bg-natural-soft top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 rounded-3xl p-6 shadow-2xl z-50 w-64 border-2 border-natural-border text-center"
+                >
+                   <button onClick={() => setGlossaryWord(null)} className="absolute right-3 top-3 text-natural-muted hover:text-natural-dark">✕</button>
+                   <h3 className="font-bold text-2xl mb-1 text-natural-dark capitalize">{glossaryWord}</h3>
+                   {glossaryLoading ? (
+                      <div className="flex flex-col items-center gap-2 py-4">
+                         <Loader2 className="animate-spin text-natural-accent" size={24} />
+                         <span className="text-xs text-natural-muted">Finding magic meaning...</span>
+                      </div>
+                   ) : glossaryDef ? (
+                      <div>
+                        {glossaryDef.img && <img src={glossaryDef.img} className="w-full h-32 object-cover rounded-2xl mb-3 shadow-inner" alt={`Illustration of ${glossaryWord}`} />}
+                        <p className="text-sm font-semibold text-natural-dark">{glossaryDef.def}</p>
+                      </div>
+                   ) : (
+                      <p className="text-sm text-natural-muted py-4">Couldn't find word art.</p>
+                   )}
+                </motion.div>
+              )}
+            </AnimatePresence>
+
+            {/* Show Educational Trivia if available */}
+            {page.trivia && (
+              <motion.div 
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="bg-natural-soft/50 p-4 rounded-xl border border-natural-border flex items-start gap-3 mt-4"
+              >
+                <div className="w-8 h-8 rounded-full bg-natural-accent/20 flex items-center justify-center shrink-0">
+                  <span className="text-xl">💡</span>
+                </div>
+                <div>
+                  <h4 className="text-xs font-bold text-natural-accent uppercase tracking-wider mb-1">Did you know?</h4>
+                  <p className="text-sm font-semibold text-natural-dark">{page.trivia}</p>
+                </div>
+              </motion.div>
+            )}
             
             {/* Interactive Choices Area: Displayed only if we are at the end of generated pages but not final max pages */}
             {currentPage === pages.length && currentPage < story.targetPages && page.choices && page.choices.length > 0 && (
@@ -419,8 +857,15 @@ export default function StorybookReader({
             
             {/* End of story marker */}
             {currentPage === story.targetPages && (
-              <div className="pt-4 border-t border-natural-border/50">
-                <div className="bg-natural-primary/10 border border-natural-primary/20 p-4 rounded-2xl text-center">
+              <div className="pt-4 border-t border-natural-border/50 relative">
+                <div className="absolute inset-0 pointer-events-none z-50 flex justify-around overflow-hidden h-32">
+                   <div className="animate-leaf-fall text-natural-primary" style={{ animationDelay: '0s' }}><Leaf size={24} /></div>
+                   <div className="animate-leaf-fall text-natural-accent" style={{ animationDelay: '0.2s' }}><Leaf size={20} /></div>
+                   <div className="animate-leaf-fall text-natural-primary" style={{ animationDelay: '0.5s' }}><Leaf size={28} /></div>
+                   <div className="animate-leaf-fall text-natural-accent" style={{ animationDelay: '0.1s' }}><Leaf size={22} /></div>
+                   <div className="animate-leaf-fall text-natural-primary" style={{ animationDelay: '0.4s' }}><Leaf size={26} /></div>
+                </div>
+                <div className="bg-natural-primary/10 border border-natural-primary/20 p-4 rounded-2xl text-center relative z-10">
                   <h4 className="font-bold text-natural-primary mb-1">The End</h4>
                   <p className="text-xs font-semibold text-natural-muted">Hope you enjoyed the adventure!</p>
                 </div>
@@ -430,44 +875,94 @@ export default function StorybookReader({
 
           {/* Voice controller panel and custom natural audio visualizer blocks */}
           <div className="mt-8 space-y-4">
+            <div className="flex items-center justify-between bg-natural-soft/50 p-2 rounded-2xl border border-natural-border/50">
+              <span className="text-xs font-bold text-natural-muted px-2 flex items-center gap-1.5">
+                <Volume2 size={12} /> Speed:
+              </span>
+              <div className="flex gap-1">
+                {[0.75, 1, 1.25].map((speed) => (
+                  <button
+                    key={speed}
+                    onClick={() => setNarrationSpeed(speed)}
+                    className={`px-3 py-1.5 text-xs font-bold rounded-xl transition-all ${
+                      narrationSpeed === speed
+                        ? "bg-natural-primary text-white shadow-sm"
+                        : "text-natural-muted hover:bg-natural-clay/40"
+                    }`}
+                  >
+                    {speed === 0.75 ? "Slower" : speed === 1 ? "Normal" : "Faster"}
+                  </button>
+                ))}
+              </div>
+            </div>
+
             <div className="flex flex-col gap-2.5">
-              <motion.button
-                whileHover={{ scale: 1.01 }}
-                whileTap={{ scale: 0.99 }}
-                onClick={playAloud}
-                className={`w-full py-3.5 text-white font-bold text-base rounded-2xl flex items-center justify-center gap-2.5 shadow-sm transition-all ${
-                  playingPage === currentPage
-                    ? "bg-natural-accent hover:bg-natural-accent/90"
-                    : "bg-natural-primary hover:bg-natural-primary/90"
-                }`}
-              >
-                {voiceLoading ? (
-                  <>
-                    <Loader2 className="animate-spin" size={18} />
-                    <span>Focusing Voice...</span>
-                  </>
-                ) : playingPage === currentPage ? (
-                  <>
-                    <Square size={16} fill="white" />
-                    <span>Stop Narrator</span>
-                  </>
-                ) : (
-                  <>
-                    <Volume2 size={18} />
-                    <span>Read Aloud</span>
-                  </>
+              <div className="flex items-center gap-2">
+                <motion.button
+                  whileHover={{ scale: 1.01 }}
+                  whileTap={{ scale: 0.99 }}
+                  onClick={() => {
+                    if (playingPage === currentPage) {
+                      if (audioCtx?.state === "running") {
+                        audioCtx.suspend();
+                      } else if (audioCtx?.state === "suspended") {
+                        audioCtx.resume();
+                      }
+                    } else {
+                      playAloud();
+                    }
+                  }}
+                  className={`flex-1 py-3.5 text-white font-bold text-base rounded-2xl flex items-center justify-center gap-2.5 shadow-sm transition-all ${
+                    playingPage === currentPage
+                      ? "bg-natural-accent hover:bg-natural-accent/90"
+                      : "bg-natural-primary hover:bg-natural-primary/90"
+                  }`}
+                >
+                  {voiceLoading ? (
+                    <>
+                      <Loader2 className="animate-spin" size={18} />
+                      <span>Focusing Voice...</span>
+                    </>
+                  ) : playingPage === currentPage && audioCtx?.state === "running" ? (
+                    <>
+                      <Square size={16} fill="white" />
+                      <span>Pause</span>
+                    </>
+                  ) : playingPage === currentPage && audioCtx?.state === "suspended" ? (
+                    <>
+                      <Play size={16} fill="white" />
+                      <span>Resume</span>
+                    </>
+                  ) : (
+                    <>
+                      <Volume2 size={18} />
+                      <span>Read Aloud</span>
+                    </>
+                  )}
+                </motion.button>
+                {playingPage === currentPage && (
+                  <motion.button
+                    whileHover={{ scale: 1.05 }}
+                    whileTap={{ scale: 0.95 }}
+                    onClick={() => {
+                      stopAloud();
+                      setTimeout(playAloud, 100);
+                    }}
+                    className="h-[52px] w-[52px] shrink-0 flex items-center justify-center bg-natural-soft text-natural-dark border border-natural-border rounded-xl hover:bg-natural-clay transition-colors"
+                  >
+                    <RotateCcw size={20} />
+                  </motion.button>
                 )}
-              </motion.button>
+              </div>
 
               {playingPage === currentPage && (
-                <div className="flex justify-center items-center gap-2 py-1 bg-natural-soft/50 rounded-xl border border-natural-border/40">
-                  <span className="text-natural-primary text-xs font-bold animate-pulse">Narrator: Sounding Outdoors...</span>
-                  <div className="flex gap-0.5 items-end h-3">
-                    <div className="w-1 h-3 bg-natural-primary rounded-full animate-bounce"></div>
-                    <div className="w-1 h-5 bg-natural-primary rounded-full animate-bounce delay-100"></div>
-                    <div className="w-1 h-4 bg-natural-primary rounded-full animate-bounce delay-200"></div>
-                    <div className="w-1 h-6 bg-natural-primary rounded-full animate-bounce delay-75"></div>
-                    <div className="w-1 h-2 bg-natural-primary rounded-full animate-bounce delay-150"></div>
+                <div className="flex flex-col gap-2 py-2 bg-natural-soft/50 rounded-xl border border-natural-border/40 px-3">
+                  <div className="flex justify-between items-center w-full">
+                    <span className="text-natural-primary text-xs font-bold animate-pulse">Narrator: Sounding Outdoors...</span>
+                    <span className="text-natural-primary text-xs font-bold" id="narration-timer-text">--s</span>
+                  </div>
+                  <div className="w-full h-1.5 bg-natural-border rounded-full overflow-hidden">
+                    <div id="narration-timer-progress" className="h-full bg-natural-primary" style={{ width: '0%' }}></div>
                   </div>
                 </div>
               )}
@@ -475,14 +970,6 @@ export default function StorybookReader({
 
             {/* Back & Next Navigation Arrows with refined natural curves and progress bar */}
             <div className="pt-4 border-t border-natural-border">
-              {/* Natural slider progress */}
-              <div className="h-2 bg-natural-soft rounded-full overflow-hidden mb-5">
-                <div 
-                  className="h-full bg-natural-primary rounded-full transition-all duration-300" 
-                  style={{ width: `${(currentPage / pages.length) * 100}%` }}
-                />
-              </div>
-
               <div className="flex items-center justify-between gap-4">
                 <button
                   onClick={() => handlePageChange("prev")}
@@ -490,7 +977,7 @@ export default function StorybookReader({
                   className={`flex items-center gap-1.5 px-4 py-2.5 rounded-2xl border text-xs font-bold transition-all ${
                     currentPage === 1
                       ? "text-natural-border border-natural-border/40 cursor-not-allowed"
-                      : "text-natural-muted border-natural-border bg-white hover:border-natural-accent hover:text-natural-accent"
+                      : "text-natural-muted border-natural-border bg-white dark:bg-natural-soft hover:border-natural-accent hover:text-natural-accent"
                   }`}
                 >
                   <ChevronLeft size={14} /> Back

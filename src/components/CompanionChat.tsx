@@ -194,8 +194,8 @@ export default function CompanionChat({ currentStory }: CompanionChatProps) {
             </div>
 
             {/* Companion Header Meta Box in muted cream */}
-            <div className="bg-natural-soft border-b border-natural-border/60 p-3 flex items-center gap-3">
-              <div className="p-1.5 rounded-2xl text-2xl bg-white border border-natural-border/50">
+            <div className="bg-natural-soft dark:bg-natural-bg border-b border-natural-border/60 p-3 flex items-center gap-3">
+              <div className="p-1.5 rounded-2xl text-2xl bg-white dark:bg-natural-soft border border-natural-border/50">
                 {activeCompanion.avatar}
               </div>
               <div>
@@ -228,7 +228,7 @@ export default function CompanionChat({ currentStory }: CompanionChatProps) {
                     className={`max-w-[85%] rounded-2xl p-3 shadow-sm ${
                       msg.role === "user"
                         ? "bg-[#D48A6A] text-white rounded-br-none"
-                        : "bg-white text-natural-dark border border-natural-border rounded-bl-none"
+                        : "bg-white dark:bg-natural-clay/30 text-natural-dark border border-natural-border rounded-bl-none"
                     }`}
                   >
                     <p className="text-[12px] font-medium leading-relaxed whitespace-pre-wrap">
@@ -251,7 +251,7 @@ export default function CompanionChat({ currentStory }: CompanionChatProps) {
             </div>
 
             {/* Footer Input Area with natural design theme choices */}
-            <div className="p-3 bg-white border-t border-natural-border/50 space-y-3">
+            <div className="p-3 bg-white dark:bg-natural-bg border-t border-natural-border/50 space-y-3">
               {/* Complex reasoning selector */}
               <div className="flex items-center justify-between">
                 <label className="flex items-center gap-1.5 cursor-pointer select-none">
@@ -279,7 +279,7 @@ export default function CompanionChat({ currentStory }: CompanionChatProps) {
                   value={inputValue}
                   onChange={(e) => setInputValue(e.target.value)}
                   placeholder={`Ask ${activeCompanion.name} about characters or meanings...`}
-                  className="flex-1 px-3.5 py-2.5 border border-natural-border/70 rounded-xl focus:border-natural-primary focus:ring-0 focus:outline-none text-xs text-natural-dark font-medium"
+                  className="flex-1 px-3.5 py-2.5 border border-natural-border/70 bg-white dark:bg-natural-soft rounded-xl focus:border-natural-primary focus:ring-0 focus:outline-none text-xs text-natural-dark font-medium"
                 />
                 <button
                   type="submit"

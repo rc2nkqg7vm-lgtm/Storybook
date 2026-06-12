@@ -1,6 +1,6 @@
-import React, { useState } from "react";
-import { motion } from "motion/react";
-import { Sparkles, Wand2, ArrowRight, User, Compass, MapPin, Volume2, Image } from "lucide-react";
+import React, { useState, useEffect, useRef } from "react";
+import { motion, AnimatePresence } from "motion/react";
+import { Sparkles, Wand2, ArrowRight, User, Compass, MapPin, Volume2, Image, Smile, Lightbulb, Sprout, Mic, MicOff } from "lucide-react";
 import { ImageSize, VoiceOption } from "../types";
 
 interface StoryCreatorProps {
@@ -8,11 +8,15 @@ interface StoryCreatorProps {
     theme: string;
     character: string;
     setting: string;
+    customPrompt: string;
     numPages: number;
     voice: string;
     imageSize: ImageSize;
+    mood: string;
+    educationalMode: boolean;
   }) => void;
   isLoading: boolean;
+  prefillCharacter?: string;
 }
 
 const CHARACTERS = [
@@ -36,6 +40,13 @@ const SETTINGS = [
   { label: "🐚 Deep Coral Gardens", value: "the Glowing Coral Gardens of the Undersea Octopus Village" },
 ];
 
+const MOODS = [
+  { label: "😊 Happy & Joyful", value: "Happy and Joyful" },
+  { label: "🗺️ Adventurous & Bold", value: "Adventurous and Bold" },
+  { label: "👻 Slightly Spooky & Silly", value: "Slightly Spooky but Silly" },
+  { label: "🌙 Calming & Sleepy", value: "Calming and Sleepy for Bedtime" },
+];
+
 const VOICES: VoiceOption[] = [
   { id: "Kore", name: "Kore (Friendly Storyteller)", gender: "Female", description: "Warm, gentle and delightful." },
   { id: "Puck", name: "Puck (Playful Fairy)", gender: "Female", description: "Cheerful, lively and spirited." },
@@ -50,9 +61,9 @@ const IMAGE_SIZES: { value: ImageSize; label: string; desc: string }[] = [
   { value: "4K", label: "🌟 Ultra Detail (4K)", desc: "Magical canvas quality! Intricate story textures" }
 ];
 
-export default function StoryCreator({ onGenerate, isLoading }: StoryCreatorProps) {
-  const [character, setCharacter] = useState("");
-  const [customCharacter, setCustomCharacter] = useState("");
+export default function StoryCreator({ onGenerate, isLoading, prefillCharacter }: StoryCreatorProps) {
+  const [character, setCharacter] = useState(prefillCharacter ? "custom" : "");
+  const [customCharacter, setCustomCharacter] = useState(prefillCharacter || "");
   const [theme, setTheme] = useState("");
   const [customTheme, setCustomTheme] = useState("");
   const [setting, setSetting] = useState("");
@@ -61,10 +72,72 @@ export default function StoryCreator({ onGenerate, isLoading }: StoryCreatorProp
   const [numPages, setNumPages] = useState<number>(4);
   const [voice, setVoice] = useState("Kore");
   const [imageSize, setImageSize] = useState<ImageSize>("1K");
+  const [mood, setMood] = useState(MOODS[0].value);
+  const [educationalMode, setEducationalMode] = useState(false);
 
-  const [customCharActive, setCustomCharActive] = useState(false);
+  const [customCharActive, setCustomCharActive] = useState(!!prefillCharacter);
   const [customThemeActive, setCustomThemeActive] = useState(false);
   const [customSettingActive, setCustomSettingActive] = useState(false);
+
+  const [thinkingIndex, setThinkingIndex] = useState(0);
+  const [isListening, setIsListening] = useState(false);
+  const recognitionRef = useRef<any>(null);
+
+  const toggleListening = () => {
+    if (isListening) {
+      recognitionRef.current?.stop();
+      setIsListening(false);
+      return;
+    }
+
+    if (!('webkitSpeechRecognition' in (window as any)) && !('SpeechRecognition' in (window as any))) {
+      alert("Oops! Your browser doesn't support our magic voice writing. Try typing instead!");
+      return;
+    }
+
+    const SpeechRecognition = (window as any).webkitSpeechRecognition || (window as any).SpeechRecognition;
+    const recognition = new SpeechRecognition();
+    recognition.continuous = true;
+    recognition.interimResults = true;
+    
+    recognition.onstart = () => setIsListening(true);
+    recognition.onresult = (event: any) => {
+      let finalTranscript = '';
+      for (let i = event.resultIndex; i < event.results.length; ++i) {
+        if (event.results[i].isFinal) {
+          finalTranscript += event.results[i][0].transcript;
+        }
+      }
+      if (finalTranscript) {
+         setCustomPrompt((prev) => prev ? prev + ' ' + finalTranscript : finalTranscript);
+      }
+    };
+    recognition.onerror = () => setIsListening(false);
+    recognition.onend = () => setIsListening(false);
+    
+    recognitionRef.current = recognition;
+    recognition.start();
+  };
+
+  const thinkingMessages = [
+    "Sowing story seeds...",
+    "Nurturing the characters...",
+    "Watering the imagination...",
+    "Fostering the setting...",
+    "Growing the narrative...",
+    "Almost ready to blossom..."
+  ];
+
+  useEffect(() => {
+    let interval: NodeJS.Timeout;
+    if (isLoading) {
+      setThinkingIndex(0);
+      interval = setInterval(() => {
+        setThinkingIndex((prev) => (prev + 1) % thinkingMessages.length);
+      }, 3000);
+    }
+    return () => clearInterval(interval);
+  }, [isLoading]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -84,7 +157,9 @@ export default function StoryCreator({ onGenerate, isLoading }: StoryCreatorProp
       customPrompt,
       numPages,
       voice,
-      imageSize
+      imageSize,
+      mood,
+      educationalMode
     });
   };
 
@@ -93,7 +168,7 @@ export default function StoryCreator({ onGenerate, isLoading }: StoryCreatorProp
       initial={{ opacity: 0, y: 30 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.6 }}
-      className="bg-white/90 backdrop-blur-md rounded-[48px] border-[10px] border-white p-8 shadow-2xl relative overflow-hidden"
+      className="bg-white/90 dark:bg-natural-bg/90 backdrop-blur-md rounded-[48px] border-[10px] border-white dark:border-natural-soft p-8 shadow-2xl relative overflow-hidden"
     >
       {/* Decorative background stamps */}
       <div className="absolute top-2 right-2 opacity-10 pointer-events-none text-natural-primary">
@@ -158,7 +233,7 @@ export default function StoryCreator({ onGenerate, isLoading }: StoryCreatorProp
                 value={customCharacter}
                 onChange={(e) => setCustomCharacter(e.target.value)}
                 placeholder="Type a character e.g., a tiny baby elephant with fluffy blue ears..."
-                className="w-full mt-3 p-3 border-2 border-natural-border bg-white rounded-xl focus:border-natural-primary focus:ring-0 focus:outline-none text-natural-dark text-sm"
+                className="w-full mt-3 p-3 border-2 border-natural-border bg-white dark:bg-natural-soft rounded-xl focus:border-natural-primary focus:ring-0 focus:outline-none text-natural-dark text-sm"
                 required={customCharActive}
               />
             )}
@@ -210,7 +285,7 @@ export default function StoryCreator({ onGenerate, isLoading }: StoryCreatorProp
                 value={customTheme}
                 onChange={(e) => setCustomTheme(e.target.value)}
                 placeholder="Type a theme e.g., learning how to make the birds whistle a happy tune..."
-                className="w-full mt-3 p-3 border-2 border-natural-border bg-white rounded-xl focus:border-natural-primary focus:ring-0 focus:outline-none text-natural-dark text-sm"
+                className="w-full mt-3 p-3 border-2 border-natural-border bg-white dark:bg-natural-soft rounded-xl focus:border-natural-primary focus:ring-0 focus:outline-none text-natural-dark text-sm"
                 required={customThemeActive}
               />
             )}
@@ -262,7 +337,7 @@ export default function StoryCreator({ onGenerate, isLoading }: StoryCreatorProp
                 value={customSetting}
                 onChange={(e) => setCustomSetting(e.target.value)}
                 placeholder="Type a location e.g., a sparkling cave of glittering pink sugar crystals..."
-                className="w-full mt-3 p-3 border-2 border-natural-border bg-white rounded-xl focus:border-natural-primary focus:ring-0 focus:outline-none text-natural-dark text-sm"
+                className="w-full mt-3 p-3 border-2 border-natural-border bg-white dark:bg-natural-soft rounded-xl focus:border-natural-primary focus:ring-0 focus:outline-none text-natural-dark text-sm"
                 required={customSettingActive}
               />
             )}
@@ -275,15 +350,57 @@ export default function StoryCreator({ onGenerate, isLoading }: StoryCreatorProp
               <span className="p-1.5 bg-natural-soft text-natural-primary rounded-xl border border-natural-border"><Sparkles size={16} /></span>
               Optional: Any extra details or magical twists?
             </label>
-            <textarea
-              value={customPrompt}
-              onChange={(e) => setCustomPrompt(e.target.value)}
-              placeholder="e.g. Include a secret hidden door, make it rhyming, add a wise old owl friend..."
-              className="w-full p-4 border-2 border-natural-border bg-white rounded-xl focus:border-natural-primary focus:ring-0 focus:outline-none text-natural-dark text-sm min-h-[100px] resize-y shadow-sm"
-            />
+            <div className="relative">
+              <textarea
+                value={customPrompt}
+                onChange={(e) => setCustomPrompt(e.target.value)}
+                placeholder="e.g. Include a secret hidden door, make it rhyming, add a wise old owl friend..."
+                className="w-full p-4 border-2 border-natural-border bg-white dark:bg-natural-soft rounded-xl focus:border-natural-primary focus:ring-0 focus:outline-none text-natural-dark text-sm min-h-[100px] resize-y shadow-sm"
+              />
+              <button
+                type="button"
+                onClick={toggleListening}
+                className={`absolute right-3 top-3 p-2 rounded-full transition-colors hidden sm:flex ${isListening ? 'bg-red-100 text-red-500 animate-pulse' : 'bg-natural-soft text-natural-muted hover:text-natural-primary'}`}
+                title="Dictate your prompt"
+              >
+                 {isListening ? <Mic size={18} /> : <MicOff size={18} />}
+              </button>
+            </div>
+            <div className="flex items-center gap-3 bg-natural-soft/50 p-3 rounded-xl border border-natural-border/50 w-max">
+              <input
+                type="checkbox"
+                id="eduMode"
+                checked={educationalMode}
+                onChange={(e) => setEducationalMode(e.target.checked)}
+                className="w-5 h-5 rounded text-natural-primary focus:ring-natural-primary border-natural-border"
+              />
+              <label htmlFor="eduMode" className="text-sm font-bold text-natural-dark flex items-center gap-1.5 cursor-pointer select-none">
+                <Lightbulb size={16} className="text-amber-500" />
+                Educational Mode (Add fun facts to pages)
+              </label>
+            </div>
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-6 border-t-2 border-natural-border">
+          {/* MOOD SELECTION */}
+          <div className="space-y-3">
+            <label className="text-sm font-bold text-natural-dark flex items-center gap-1.5">
+              <Smile className="text-natural-primary" size={16} />
+              Story Mood & Tone
+            </label>
+            <select
+              value={mood}
+              onChange={(e) => setMood(e.target.value)}
+              className="w-full p-3 border-2 border-natural-border bg-white dark:bg-natural-soft rounded-2xl text-sm font-bold focus:border-natural-primary focus:ring-0 focus:outline-none text-natural-dark cursor-pointer shadow-sm"
+            >
+              {MOODS.map((m) => (
+                <option key={m.value} value={m.value}>
+                  {m.label}
+                </option>
+              ))}
+            </select>
+          </div>
+
           {/* NARRATOR VOICE */}
           <div className="space-y-3">
             <label className="text-sm font-bold text-natural-dark flex items-center gap-1.5">
@@ -293,7 +410,7 @@ export default function StoryCreator({ onGenerate, isLoading }: StoryCreatorProp
             <select
               value={voice}
               onChange={(e) => setVoice(e.target.value)}
-              className="w-full p-3 border-2 border-natural-border bg-white rounded-2xl text-sm font-bold focus:border-natural-primary focus:ring-0 focus:outline-none text-natural-dark cursor-pointer shadow-sm"
+              className="w-full p-3 border-2 border-natural-border bg-white dark:bg-natural-soft rounded-2xl text-sm font-bold focus:border-natural-primary focus:ring-0 focus:outline-none text-natural-dark cursor-pointer shadow-sm"
             >
               {VOICES.map((v) => (
                 <option key={v.id} value={v.id}>
@@ -318,7 +435,7 @@ export default function StoryCreator({ onGenerate, isLoading }: StoryCreatorProp
                   className={`p-2.5 rounded-2xl border text-center transition-all ${
                     imageSize === size.value
                       ? "bg-natural-primary border-natural-primary text-white font-bold scale-[1.02] shadow-sm"
-                      : "border-natural-border/60 bg-white text-natural-muted font-bold text-xs hover:bg-natural-soft"
+                      : "border-natural-border/60 bg-white dark:bg-natural-soft text-natural-muted font-bold text-xs hover:bg-natural-soft dark:hover:bg-natural-clay"
                   }`}
                   title={size.desc}
                 >
@@ -357,26 +474,32 @@ export default function StoryCreator({ onGenerate, isLoading }: StoryCreatorProp
         </div>
 
         {/* LAUNCH STORYBOOK */}
-        <div className="pt-4 animate-pulse">
+        <div className={`pt-4 ${isLoading ? 'animate-pulse' : ''}`}>
           <motion.button
-            whileHover={{ scale: 1.01 }}
-            whileTap={{ scale: 0.99 }}
+            whileHover={{ scale: isLoading ? 1 : 1.01 }}
+            whileTap={{ scale: isLoading ? 1 : 0.99 }}
             type="submit"
             disabled={isLoading}
-            className={`w-full py-4 text-white font-extrabold text-lg rounded-3xl flex items-center justify-center gap-3 transition-all shadow-lg shadow-natural-primary/25 ${
+            className={`w-full py-4 text-white font-extrabold text-lg rounded-3xl flex items-center justify-center gap-3 transition-all shadow-lg shadow-natural-primary/25 overflow-hidden ${
               isLoading
-                ? "bg-natural-border cursor-not-allowed"
-                : "bg-[#D48A6A] hover:bg-[#C47A5A] border-b-4 border-[#A35D43]"
+                ? "bg-natural-primary cursor-not-allowed border-b-4 border-natural-primary"
+                : "bg-natural-accent hover:bg-[#C47A5A] border-b-4 border-[#A35D43]"
             }`}
           >
             {isLoading ? (
-              <>
-                <svg className="animate-spin h-5 w-5 text-white" fill="none" viewBox="0 0 24 24">
-                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-                </svg>
-                <span>Nurturing and Sowing Story Seeds...</span>
-              </>
+              <AnimatePresence mode="wait">
+                <motion.div
+                  key={thinkingIndex}
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -10 }}
+                  transition={{ duration: 0.3 }}
+                  className="flex items-center gap-2"
+                >
+                  <Sprout className="animate-bounce" size={20} />
+                  <span>{thinkingMessages[thinkingIndex]}</span>
+                </motion.div>
+              </AnimatePresence>
             ) : (
               <>
                 <ArrowRight size={20} />

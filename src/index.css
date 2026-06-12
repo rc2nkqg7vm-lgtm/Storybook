@@ -1,19 +1,63 @@
 @import "tailwindcss";
 
 @theme {
-  --color-natural-bg: #FDFBF7;
-  --color-natural-primary: #7E8B67;
-  --color-natural-accent: #D48A6A;
-  --color-natural-dark: #4A4A35;
-  --color-natural-muted: #5A5A40;
-  --color-natural-border: #E8E1D5;
-  --color-natural-soft: #F2EDE4;
-  --color-natural-clay: #EBE5D9;
+  --color-natural-bg: var(--color-natural-bg-val);
+  --color-natural-primary: var(--color-natural-primary-val);
+  --color-natural-accent: var(--color-natural-accent-val);
+  --color-natural-dark: var(--color-natural-dark-val);
+  --color-natural-muted: var(--color-natural-muted-val);
+  --color-natural-border: var(--color-natural-border-val);
+  --color-natural-soft: var(--color-natural-soft-val);
+  --color-natural-clay: var(--color-natural-clay-val);
+}
+
+@layer base {
+  :root {
+    --color-natural-bg-val: #FDFBF7;
+    --color-natural-primary-val: #7E8B67;
+    --color-natural-accent-val: #D48A6A;
+    --color-natural-dark-val: #4A4A35;
+    --color-natural-muted-val: #5A5A40;
+    --color-natural-border-val: #E8E1D5;
+    --color-natural-soft-val: #F2EDE4;
+    --color-natural-clay-val: #EBE5D9;
+  }
+
+  .dark {
+    --color-natural-bg-val: #1B1E17;
+    --color-natural-primary-val: #8EA370;
+    --color-natural-accent-val: #DE9374;
+    --color-natural-dark-val: #FFFDF9;
+    --color-natural-muted-val: #ABAFA6;
+    --color-natural-border-val: #383D31;
+    --color-natural-soft-val: #272B23;
+    --color-natural-clay-val: #2E332A;
+  }
 }
 
 body {
-  background-color: #FDFBF7;
-  color: #5A5A40;
+  background-color: var(--color-natural-bg-val);
+  color: var(--color-natural-muted-val);
+}
+
+@layer utilities {
+  .animate-leaf-fall {
+    animation: leaf-fall linear forwards;
+  }
+}
+
+@keyframes leaf-fall {
+  0% { 
+    transform: translateY(-10vh) translateX(0) rotate(0deg); 
+    opacity: 1; 
+  }
+  50% {
+    transform: translateY(40vh) translateX(20px) rotate(180deg);
+  }
+  100% { 
+    transform: translateY(110vh) translateX(-20px) rotate(360deg); 
+    opacity: 0; 
+  }
 }
 
 /* Custom scrollbar for organic child chat thread */
@@ -21,12 +65,12 @@ body {
   width: 6px;
 }
 ::-webkit-scrollbar-track {
-  background: #FDFBF7;
+  background: var(--color-natural-bg-val);
 }
 ::-webkit-scrollbar-thumb {
-  background: #E8E1D5;
+  background: var(--color-natural-border-val);
   border-radius: 4px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #7E8B67;
+  background: var(--color-natural-primary-val);
 }

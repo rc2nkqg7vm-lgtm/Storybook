@@ -7,13 +7,17 @@ export interface StoryPage {
   text: string;
   imagePrompt: string;
   choices?: StoryChoice[];
+  trivia?: string;
 }
 
 export interface Storybook {
+  id?: string;
   title: string;
   theme: string;
   character: string;
   setting: string;
+  mood?: string;
+  educationalMode?: boolean;
   customPrompt?: string;
   targetPages: number;
   pages: StoryPage[];
